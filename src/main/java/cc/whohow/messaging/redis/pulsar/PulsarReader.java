@@ -1,4 +1,4 @@
-package cc.whohow.messaging.redis.protocol;
+package cc.whohow.messaging.redis.pulsar;
 
 import cc.whohow.messaging.redis.*;
 import com.fasterxml.jackson.databind.JsonNode;

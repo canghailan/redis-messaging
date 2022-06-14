@@ -1,6 +1,5 @@
 package cc.whohow.messaging.redis;
 
-import cc.whohow.messaging.redis.protocol.PulsarReader;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.pubsub.RedisPubSubListener;
@@ -14,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class RedisKeyspaceNotification implements RedisPubSubListener<String, String> {
-    private static final Logger LOG = LoggerFactory.getLogger(PulsarReader.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RedisKeyspaceNotification.class);
 
     protected final StatefulRedisPubSubConnection<String, String> connection;
     protected Map<String, List<RedisKeyspaceListener>> listeners = new ConcurrentHashMap<>();
