@@ -20,7 +20,7 @@ import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.time.ZoneId;
+import java.time.Clock;
 import java.util.Properties;
 
 @Configuration
@@ -29,8 +29,8 @@ public class RedisMessagingServerConfiguration {
     ApplicationContext applicationContext;
 
     @Bean
-    public ZoneId timeZone() {
-        return ZoneId.systemDefault();
+    public Clock clock() {
+        return Clock.systemDefaultZone();
     }
 
     @Bean

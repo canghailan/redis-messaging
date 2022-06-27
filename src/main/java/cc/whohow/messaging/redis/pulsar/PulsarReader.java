@@ -15,7 +15,7 @@ import javax.inject.Named;
 import javax.websocket.*;
 import javax.websocket.server.PathParam;
 import javax.websocket.server.ServerEndpoint;
-import java.time.ZoneId;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.concurrent.LinkedBlockingDeque;
@@ -34,7 +34,7 @@ public class PulsarReader implements RedisKeyspaceListener {
     private final AtomicBoolean readMore = new AtomicBoolean(true);
 
     @Inject
-    private ZoneId timeZone;
+    private Clock clock;
     @Inject
     private ObjectMapper objectMapper;
     @Inject
@@ -66,8 +66,7 @@ public class PulsarReader implements RedisKeyspaceListener {
         this.tenant = tenant;
         this.namespace = namespace;
         this.topic = topic;
-        this.readerName = queryParameters.get("readerName")
-                .orElse(session.getId());
+        this.readerName = queryParameters.get("readerName").orElse(null);
         this.receiverQueueSize = queryParameters.get("receiverQueueSize")
                 .map(Integer::parseInt)
                 .orElse(1000);
@@ -82,7 +81,7 @@ public class PulsarReader implements RedisKeyspaceListener {
                 lastMessageId = EARLIEST;
             }
             case "latest" -> {
-                lastMessageId = LATEST;
+                lastMessageId = Long.toString(clock.millis());
             }
             default -> {
                 lastMessageId = messageId;
@@ -146,7 +145,8 @@ public class PulsarReader implements RedisKeyspaceListener {
                         } else {
                             for (ObjectNode message : r) {
                                 lastMessageId = message.path("messageId").textValue();
-                                message.put("publishTime", RedisMessaging.format(RedisMessaging.getTime(lastMessageId), timeZone));
+                                message.put("publishTime",
+                                        RedisMessaging.format(RedisMessaging.getTime(lastMessageId), clock.getZone()));
                                 message.put("redeliveryCount", 0);
 
                                 pendingMessages.addLast(lastMessageId);

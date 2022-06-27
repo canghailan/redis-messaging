@@ -17,7 +17,7 @@ import javax.inject.Named;
 import javax.websocket.*;
 import javax.websocket.server.PathParam;
 import javax.websocket.server.ServerEndpoint;
-import java.time.ZoneId;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,7 +34,7 @@ public class PulsarConsumer implements RedisKeyspaceListener {
     private final AtomicInteger permitMessages = new AtomicInteger(0);
 
     @Inject
-    private ZoneId timeZone;
+    private Clock clock;
     @Inject
     private ObjectMapper objectMapper;
     @Inject
@@ -215,17 +215,18 @@ public class PulsarConsumer implements RedisKeyspaceListener {
                         } else {
                             for (ObjectNode message : r) {
                                 lastMessageId = message.path("messageId").textValue();
-                                message.put("publishTime", RedisMessaging.format(RedisMessaging.getTime(lastMessageId), timeZone));
+                                message.put("publishTime",
+                                        RedisMessaging.format(RedisMessaging.getTime(lastMessageId), clock.getZone()));
                                 message.put("redeliveryCount", 0);
 
                                 messageCounter.increment();
                                 session.getAsyncRemote().sendText(message.toString());
                             }
                             permitMessages.addAndGet(-r.size());
-                            lock.set(false);
-                            if (consumeMore.get()) {
-                                consume();
-                            }
+                        }
+                        lock.set(false);
+                        if (consumeMore.get()) {
+                            consume();
                         }
                     });
         } else {

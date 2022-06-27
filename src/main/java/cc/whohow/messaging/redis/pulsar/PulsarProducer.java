@@ -81,8 +81,7 @@ public class PulsarProducer {
                 .orElse(30L * 1000L);
         this.messageRoutingMode = queryParameters.get("messageRoutingMode").orElse(null);
         this.compressionType = queryParameters.get("compressionType").orElse(null);
-        this.producerName = queryParameters.get("producerName")
-                .orElse(session.getId());
+        this.producerName = queryParameters.get("producerName").orElse(null);
         this.initialSequenceId = queryParameters.get("initialSequenceId")
                 .map(Long::parseLong)
                 .orElse(30L * 1000L);
