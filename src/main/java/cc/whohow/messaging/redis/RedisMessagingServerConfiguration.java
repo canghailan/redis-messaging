@@ -1,13 +1,14 @@
 package cc.whohow.messaging.redis;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.jackson.JsonFormat;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
-import io.undertow.Undertow;
-import io.undertow.servlet.Servlets;
 import io.undertow.servlet.api.DeploymentInfo;
-import io.undertow.servlet.api.DeploymentManager;
 import io.undertow.websockets.jsr.WebSocketDeploymentInfo;
+import org.jboss.resteasy.core.ResteasyDeploymentImpl;
+import org.jboss.resteasy.plugins.server.undertow.UndertowJaxrsServer;
+import org.jboss.resteasy.spi.ResteasyDeployment;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
 
 import javax.inject.Inject;
 import javax.websocket.server.ServerEndpoint;
+import javax.ws.rs.core.Application;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.UncheckedIOException;
@@ -65,6 +67,18 @@ public class RedisMessagingServerConfiguration {
     }
 
     @Bean
+    public JsonFormat jsonFormat() {
+        return new JsonFormat();
+    }
+
+    @Bean
+    public ResteasyDeployment resteasyDeployment(@Autowired Application application) {
+        ResteasyDeployment resteasyDeployment = new ResteasyDeploymentImpl();
+        resteasyDeployment.setApplication(application);
+        return resteasyDeployment;
+    }
+
+    @Bean
     public WebSocketDeploymentInfo webSocketDeploymentInfo() {
         WebSocketDeploymentInfo webSockets = new WebSocketDeploymentInfo();
         for (Object endpoint : applicationContext.getBeansWithAnnotation(ServerEndpoint.class).values()) {
@@ -74,23 +88,19 @@ public class RedisMessagingServerConfiguration {
     }
 
     @Bean
-    public DeploymentInfo deploymentInfo(@Autowired WebSocketDeploymentInfo webSockets) {
-        return Servlets.deployment()
+    public UndertowJaxrsServer server(
+            @Autowired ResteasyDeployment resteasyDeployment,
+            @Autowired WebSocketDeploymentInfo webSockets) throws Exception {
+        UndertowJaxrsServer jaxrsServer = new UndertowJaxrsServer();
+        jaxrsServer.setPort(8080);
+
+        DeploymentInfo deploymentInfo = jaxrsServer.undertowDeployment(resteasyDeployment)
                 .setContextPath("/")
                 .setClassLoader(Thread.currentThread().getContextClassLoader())
                 .setDeploymentName("redis-messaging")
                 .addServletContextAttribute(WebSocketDeploymentInfo.ATTRIBUTE_NAME, webSockets);
-    }
+        jaxrsServer.deploy(deploymentInfo);
 
-    @Bean
-    public Undertow undertow(@Autowired DeploymentInfo deployment) throws Exception {
-        DeploymentManager deploymentManager = Servlets.defaultContainer()
-                .addDeployment(deployment);
-        deploymentManager.deploy();
-
-        return Undertow.builder()
-                .addHttpListener(8080, "localhost")
-                .setHandler(deploymentManager.start())
-                .build();
+        return jaxrsServer;
     }
 }

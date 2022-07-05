@@ -26,8 +26,6 @@ import java.util.concurrent.atomic.LongAdder;
 @Scope("prototype")
 @ServerEndpoint(value = "/pulsar/ws/v2/reader/persistent/{tenant}/{namespace}/{topic}", configurator = SpringConfigurator.class)
 public class PulsarReader implements RedisKeyspaceListener {
-    private static final String EARLIEST = "0";
-    private static final String LATEST = "$";
     private static final Logger LOG = LoggerFactory.getLogger(PulsarReader.class);
     private final LongAdder messageCounter = new LongAdder();
     private final AtomicBoolean lock = new AtomicBoolean(false);
@@ -42,6 +40,7 @@ public class PulsarReader implements RedisKeyspaceListener {
     @Inject
     private RedisKeyspaceNotification redisKeyspaceNotification;
 
+    private Session session;
     private String tenant;
     private String namespace;
     private String topic;
@@ -49,10 +48,9 @@ public class PulsarReader implements RedisKeyspaceListener {
     private int receiverQueueSize;
     private String messageId;
     private String token;
-    private String key;
+    private String redisKey;
     private Deque<String> pendingMessages;
     private String lastMessageId;
-    private Session session;
 
     @OnOpen
     public void onOpen(Session session,
@@ -63,6 +61,7 @@ public class PulsarReader implements RedisKeyspaceListener {
 
         QueryParameters queryParameters = new QueryParameters(session.getRequestParameterMap());
 
+        this.session = session;
         this.tenant = tenant;
         this.namespace = namespace;
         this.topic = topic;
@@ -72,23 +71,29 @@ public class PulsarReader implements RedisKeyspaceListener {
                 .orElse(1000);
         this.messageId = queryParameters.get("messageId").orElse("latest");
         this.token = queryParameters.get("token").orElse(null);
-        this.key = RedisMessaging.key(tenant, namespace, topic);
+        this.redisKey = RedisMessaging.toRedisKey(tenant, namespace, topic);
         this.pendingMessages = new LinkedBlockingDeque<>(receiverQueueSize);
-        this.session = session;
 
         switch (messageId) {
-            case "earliest" -> {
-                lastMessageId = EARLIEST;
+            case "earliest": {
+                lastMessageId = RedisMessaging.EARLIEST;
+                break;
             }
-            case "latest" -> {
+            case "latest": {
                 lastMessageId = Long.toString(clock.millis());
+                break;
             }
-            default -> {
-                lastMessageId = messageId;
+            default: {
+                if (messageId.startsWith(RedisMessaging.TIMESTAMP_PREFIX)) {
+                    lastMessageId = messageId.substring(1);
+                } else {
+                    lastMessageId = messageId;
+                }
+                break;
             }
         }
         read();
-        redisKeyspaceNotification.addListener(key, this);
+        redisKeyspaceNotification.addListener(redisKey, this);
     }
 
     @OnMessage
@@ -99,7 +104,7 @@ public class PulsarReader implements RedisKeyspaceListener {
         String type = message.path("type").textValue();
         if (type == null) {
             // acknowledge
-            String messageId = message.path("messageId").textValue();
+            String messageId = message.path(RedisMessaging.MESSAGE_ID).textValue();
             pendingMessages.remove(messageId);
             read();
         } else if ("isEndOfTopic".equals(type)) {
@@ -117,12 +122,14 @@ public class PulsarReader implements RedisKeyspaceListener {
     public void onClose(CloseReason closeReason) {
         LOG.debug("{} Close: reader/{}/{}/{} {}", session.getId(), tenant, namespace, topic, closeReason.getReasonPhrase());
 
-        redisKeyspaceNotification.removeListener(key, this);
+        redisKeyspaceNotification.removeListener(redisKey, this);
     }
 
     @Override
-    public void onKeyEvent() {
-        read();
+    public void onKeyEvent(RedisKeyEvent event) {
+        if (event.is("xadd")) {
+            read();
+        }
     }
 
     protected void read() {
@@ -132,29 +139,29 @@ public class PulsarReader implements RedisKeyspaceListener {
         }
         if (lock.compareAndSet(false, true)) {
             readMore.set(false);
-            LOG.trace("XREAD COUNT {} STREAMS {} {}", count, key, lastMessageId);
+            LOG.trace("XREAD COUNT {} STREAMS {} {}", count, redisKey, lastMessageId);
             redis.executeAsync(
                             CommandType.XREAD,
                             new CommandArgs<>(Redis.CODEC)
                                     .add("COUNT").add(count)
-                                    .add("STREAMS").add(key).add(lastMessageId),
-                            new RedisMessageOutput<>(objectMapper, new ArrayList<>(count)))
+                                    .add("STREAMS").add(redisKey).add(lastMessageId),
+                            new RedisJsonMessageOutput(objectMapper, new ArrayList<>()))
                     .whenComplete((r, e) -> {
                         if (e != null) {
                             LOG.error(e.getMessage(), e);
                         } else {
                             for (ObjectNode message : r) {
-                                lastMessageId = message.path("messageId").textValue();
-                                message.put("publishTime",
+                                lastMessageId = message.path(RedisMessaging.MESSAGE_ID).textValue();
+                                message.put(RedisMessaging.PUBLISH_TIME,
                                         RedisMessaging.format(RedisMessaging.getTime(lastMessageId), clock.getZone()));
-                                message.put("redeliveryCount", 0);
+                                message.put(RedisMessaging.REDELIVERY_COUNT, 0);
 
                                 pendingMessages.addLast(lastMessageId);
                                 messageCounter.increment();
                                 session.getAsyncRemote().sendText(message.toString());
                             }
-                            if (LATEST.equals(lastMessageId)) {
-                                lastMessageId = EARLIEST;
+                            if (RedisMessaging.LATEST.equals(lastMessageId)) {
+                                lastMessageId = RedisMessaging.EARLIEST;
                             }
                             lock.set(false);
                             if (readMore.get()) {

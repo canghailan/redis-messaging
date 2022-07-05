@@ -15,13 +15,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class RedisKeyspaceNotification implements RedisPubSubListener<String, String> {
     private static final Logger LOG = LoggerFactory.getLogger(RedisKeyspaceNotification.class);
 
+    protected final Map<String, List<RedisKeyspaceListener>> listeners = new ConcurrentHashMap<>();
     protected final StatefulRedisPubSubConnection<String, String> connection;
-    protected Map<String, List<RedisKeyspaceListener>> listeners = new ConcurrentHashMap<>();
+    protected final String keyEventPrefix;
 
     public RedisKeyspaceNotification(RedisClient redisClient, RedisURI uri) {
         this.connection = redisClient.connectPubSub(uri);
+        this.keyEventPrefix = "__keyevent@" + uri.getDatabase() + "__:";
+
         this.connection.addListener(this);
-        this.connection.async().psubscribe("__keyevent@" + uri.getDatabase() + "__:*");
+        this.connection.async().psubscribe(keyEventPrefix + "*");
     }
 
     public void addListener(String key, RedisKeyspaceListener listener) {
@@ -45,9 +48,10 @@ public class RedisKeyspaceNotification implements RedisPubSubListener<String, St
         LOG.trace("{} {}", channel, message);
         List<RedisKeyspaceListener> list = listeners.get(message);
         if (list != null) {
+            RedisKeyEvent event = new RedisKeyEvent(channel, message);
             for (RedisKeyspaceListener listener : list) {
                 try {
-                    listener.onKeyEvent();
+                    listener.onKeyEvent(event);
                 } catch (Throwable e) {
                     LOG.warn(e.getMessage(), e);
                 }

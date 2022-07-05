@@ -42,6 +42,7 @@ public class PulsarConsumer implements RedisKeyspaceListener {
     @Inject
     private RedisKeyspaceNotification redisKeyspaceNotification;
 
+    private Session session;
     private String tenant;
     private String namespace;
     private String topic;
@@ -56,9 +57,8 @@ public class PulsarConsumer implements RedisKeyspaceListener {
     private boolean pullMode;
     private int negativeAckRedeliveryDelay;
     private String token;
-    private String key;
+    private String redisKey;
     private String lastMessageId;
-    private Session session;
 
     @OnOpen
     public void onOpen(Session session,
@@ -70,6 +70,7 @@ public class PulsarConsumer implements RedisKeyspaceListener {
 
         QueryParameters queryParameters = new QueryParameters(session.getRequestParameterMap());
 
+        this.session = session;
         this.tenant = tenant;
         this.namespace = namespace;
         this.topic = topic;
@@ -99,7 +100,7 @@ public class PulsarConsumer implements RedisKeyspaceListener {
                 .map(Integer::parseInt)
                 .orElse(60000);
         this.token = queryParameters.get("token").orElse(null);
-        this.key = RedisMessaging.key(tenant, namespace, topic);
+        this.redisKey = RedisMessaging.toRedisKey(tenant, namespace, topic);
 
         if (pullMode) {
             permitMessages.set(0);
@@ -107,14 +108,12 @@ public class PulsarConsumer implements RedisKeyspaceListener {
             permitMessages.set(receiverQueueSize);
         }
 
-        this.session = session;
-
-        LOG.trace("XGROUP CREATE {} {} {} MKSTREAM", key, subscription, "$");
+        LOG.trace("XGROUP CREATE {} {} {} MKSTREAM", redisKey, subscription, "$");
         redis.executeAsync(
                 CommandType.XGROUP,
                 new CommandArgs<>(Redis.CODEC)
                         .add("CREATE")
-                        .add(key)
+                        .add(redisKey)
                         .add(subscription)
                         .add("$")
                         .add("MKSTREAM"),
@@ -126,7 +125,7 @@ public class PulsarConsumer implements RedisKeyspaceListener {
                 }
             }
             consume();
-            redisKeyspaceNotification.addListener(key, this);
+            redisKeyspaceNotification.addListener(redisKey, this);
         });
     }
 
@@ -138,13 +137,13 @@ public class PulsarConsumer implements RedisKeyspaceListener {
         String type = message.path("type").textValue();
         if (type == null) {
             // acknowledge
-            String messageId = message.path("messageId").textValue();
+            String messageId = message.path(RedisMessaging.MESSAGE_ID).textValue();
 
-            LOG.trace("XACK {} {} {}", key, subscription, messageId);
+            LOG.trace("XACK {} {} {}", redisKey, subscription, messageId);
             redis.executeAsync(
                             CommandType.XACK,
                             new CommandArgs<>(Redis.CODEC)
-                                    .add(key)
+                                    .add(redisKey)
                                     .add(subscription)
                                     .add(messageId),
                             new IntegerOutput<>(Redis.CODEC))
@@ -160,22 +159,25 @@ public class PulsarConsumer implements RedisKeyspaceListener {
                     });
         } else {
             switch (type) {
-                case "permit" -> {
+                case "permit": {
                     if (pullMode) {
                         permitMessages.addAndGet(message.path("permitMessages").intValue());
                         consume();
                     }
+                    break;
                 }
-                case "isEndOfTopic" -> {
+                case "isEndOfTopic": {
                     session.getAsyncRemote().sendText(
                             objectMapper.createObjectNode()
                                     .put("endOfTopic", false)
                                     .toString()
                     );
+                    break;
                 }
-                default -> {
+                default: {
                     // negativeAcknowledge
                     LOG.error(text);
+                    break;
                 }
             }
         }
@@ -186,12 +188,14 @@ public class PulsarConsumer implements RedisKeyspaceListener {
     public void onClose(CloseReason closeReason) {
         LOG.debug("{} Close: consumer/{}/{}/{} {}", session.getId(), tenant, namespace, topic, closeReason.getReasonPhrase());
 
-        redisKeyspaceNotification.removeListener(key, this);
+        redisKeyspaceNotification.removeListener(redisKey, this);
     }
 
     @Override
-    public void onKeyEvent() {
-        consume();
+    public void onKeyEvent(RedisKeyEvent event) {
+        if (event.is("xadd")) {
+            consume();
+        }
     }
 
     protected void consume() {
@@ -201,23 +205,23 @@ public class PulsarConsumer implements RedisKeyspaceListener {
         }
         if (lock.compareAndSet(false, true)) {
             consumeMore.set(false);
-            LOG.trace("XREADGROUP GROUP {} {} COUNT {} STREAMS {} {}", subscription, consumerName, count, key, ">");
+            LOG.trace("XREADGROUP GROUP {} {} COUNT {} STREAMS {} {}", subscription, consumerName, count, redisKey, ">");
             redis.executeAsync(
                             CommandType.XREADGROUP,
                             new CommandArgs<>(Redis.CODEC)
                                     .add("GROUP").add(subscription).add(consumerName)
                                     .add("COUNT").add(count)
-                                    .add("STREAMS").add(key).add(">"),
-                            new RedisMessageOutput<>(objectMapper, new ArrayList<>(count)))
+                                    .add("STREAMS").add(redisKey).add(">"),
+                            new RedisJsonMessageOutput(objectMapper, new ArrayList<>()))
                     .whenComplete((r, e) -> {
                         if (e != null) {
                             LOG.error(e.getMessage(), e);
                         } else {
                             for (ObjectNode message : r) {
-                                lastMessageId = message.path("messageId").textValue();
-                                message.put("publishTime",
+                                lastMessageId = message.path(RedisMessaging.MESSAGE_ID).textValue();
+                                message.put(RedisMessaging.PUBLISH_TIME,
                                         RedisMessaging.format(RedisMessaging.getTime(lastMessageId), clock.getZone()));
-                                message.put("redeliveryCount", 0);
+                                message.put(RedisMessaging.REDELIVERY_COUNT, 0);
 
                                 messageCounter.increment();
                                 session.getAsyncRemote().sendText(message.toString());

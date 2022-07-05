@@ -20,7 +20,9 @@ import javax.inject.Named;
 import javax.websocket.*;
 import javax.websocket.server.PathParam;
 import javax.websocket.server.ServerEndpoint;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.LongAdder;
 
 @Named
@@ -35,6 +37,7 @@ public class PulsarProducer {
     @Inject
     private Redis redis;
 
+    private Session session;
     private String tenant;
     private String namespace;
     private String topic;
@@ -49,8 +52,7 @@ public class PulsarProducer {
     private long initialSequenceId;
     private String hashingScheme;
     private String token;
-    private String key;
-    private Session session;
+    private String redisKey;
 
     @OnOpen
     public void onOpen(Session session,
@@ -61,6 +63,7 @@ public class PulsarProducer {
 
         QueryParameters queryParameters = new QueryParameters(session.getRequestParameterMap());
 
+        this.session = session;
         this.tenant = tenant;
         this.namespace = namespace;
         this.topic = topic;
@@ -87,9 +90,7 @@ public class PulsarProducer {
                 .orElse(30L * 1000L);
         this.hashingScheme = queryParameters.get("hashingScheme").orElse(null);
         this.token = queryParameters.get("token").orElse(null);
-        this.key = RedisMessaging.key(tenant, namespace, topic);
-
-        this.session = session;
+        this.redisKey = RedisMessaging.toRedisKey(tenant, namespace, topic);
     }
 
     @OnMessage
@@ -97,35 +98,39 @@ public class PulsarProducer {
         LOG.trace("{} Message: producer/{}/{}/{} {}", session.getId(), tenant, namespace, topic, text);
 
         JsonNode message = objectMapper.readTree(text);
-        JsonNode payload = message.get("payload");
-        JsonNode properties = message.path("properties");
-        JsonNode context = message.path("context");
-        JsonNode key = message.path("key");
-        JsonNode replicationClusters = message.path("replicationClusters");
+        JsonNode payload = message.get(RedisMessaging.PAYLOAD);
+        JsonNode properties = message.path(RedisMessaging.PROPERTIES);
+        JsonNode context = message.path(RedisMessaging.CONTEXT);
+        JsonNode key = message.path(RedisMessaging.KEY);
+        JsonNode replicationClusters = message.path(RedisMessaging.REPLICATION_CLUSTERS);
 
         CommandArgs<byte[], byte[]> commandArgs = new CommandArgs<>(Redis.CODEC)
-                .add(this.key).add("*");
-        if (producerName != null) {
-            commandArgs.add("producerName").add(producerName);
+                .add(redisKey).add("*");
+        if (!properties.isEmpty()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = properties.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                commandArgs.add(RedisMessaging.PROPERTIES_PREFIX + field.getKey()).add(field.getValue().textValue());
+            }
         }
-        commandArgs.add("payload").add(payload.binaryValue());
-        if (!properties.isMissingNode()) {
-            commandArgs.add("properties").add(properties.toString());
-        }
+        commandArgs.add(RedisMessaging.PAYLOAD).add(payload.binaryValue());
         if (!context.isMissingNode()) {
-            commandArgs.add("context").add(context.asText());
+            commandArgs.add(RedisMessaging.CONTEXT).add(context.asText());
         }
         if (!key.isMissingNode()) {
-            commandArgs.add("key").add(key.asText());
+            commandArgs.add(RedisMessaging.KEY).add(key.asText());
         }
         if (!replicationClusters.isMissingNode()) {
-            commandArgs.add("replicationClusters").add(replicationClusters.toString());
+            commandArgs.add(RedisMessaging.REPLICATION_CLUSTERS).add(replicationClusters.toString());
+        }
+        if (producerName != null) {
+            commandArgs.add(RedisMessaging.PRODUCER_NAME).add(producerName);
         }
 
         CommandOutput<byte[], byte[], List<String>> commandOutput = new StringListOutput<>(Redis.CODEC);
         commandOutput.multi(1);
 
-        LOG.trace("XADD {} * {}", this.key, text);
+        LOG.trace("XADD {} * {}", this.redisKey, text);
         redis.executeAsync(CommandType.XADD, commandArgs, commandOutput)
                 .whenComplete((r, e) -> {
                     ObjectNode response = objectMapper.createObjectNode();
@@ -133,11 +138,11 @@ public class PulsarProducer {
                         LOG.error(e.getMessage(), e);
                         response.put("result", "send-error:8")
                                 .put("errorMsg", e.getMessage())
-                                .set("context", context);
+                                .set(RedisMessaging.CONTEXT, context);
                     } else {
                         response.put("result", "ok")
                                 .put("messageId", r.get(0))
-                                .set("context", context);
+                                .set(RedisMessaging.CONTEXT, context);
                     }
                     session.getAsyncRemote().sendText(response.toString());
                 });

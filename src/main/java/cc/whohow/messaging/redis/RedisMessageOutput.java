@@ -1,13 +1,7 @@
 package cc.whohow.messaging.redis;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.util.ByteBufferBackedInputStream;
 import io.lettuce.core.output.CommandOutput;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -40,43 +34,41 @@ import java.util.List;
 //            2) "Jane"
 //            3) "surname"
 //            4) "Austen"
-public class RedisMessageOutput<T> extends CommandOutput<byte[], byte[], List<ObjectNode>> {
+public abstract class RedisMessageOutput<T> extends CommandOutput<byte[], byte[], List<T>> {
     private static final int STREAM = 2;
     private static final int ID = 4;
     private static final int KEY_VALUE = 5;
-    private final ObjectMapper objectMapper;
     private int depth = 0;
     private String key;
-    private ObjectNode message;
 
-    public RedisMessageOutput(ObjectMapper objectMapper, List<ObjectNode> output) {
+    public RedisMessageOutput(List<T> output) {
         super(Redis.CODEC, output);
-        this.objectMapper = objectMapper;
-        this.message = objectMapper.createObjectNode();
     }
 
     @Override
     public void set(ByteBuffer bytes) {
         switch (depth) {
-            case STREAM -> {
+            case STREAM: {
+                break;
             }
-            case ID -> {
-                message.put("messageId", decodeAscii(bytes));
+            case ID: {
+                setMessageId(decodeAscii(bytes));
+                break;
             }
-            case KEY_VALUE -> {
+            case KEY_VALUE: {
                 if (key == null) {
                     key = decodeAscii(bytes);
                 } else {
-                    switch (key) {
-                        case "payload" -> {
-                            message.put("payload", base64(bytes));
-                        }
-                        case "properties" -> {
-                            message.set("properties", json(bytes));
-                        }
+                    if (RedisMessaging.PAYLOAD.equals(key)) {
+                        setPayload(bytes);
+                    } else if (key.startsWith(RedisMessaging.PROPERTIES_PREFIX)) {
+                        setProperties(key, utf8(bytes));
+                    } else {
+                        setMetadata(key, utf8(bytes));
                     }
                     key = null;
                 }
+                break;
             }
         }
     }
@@ -89,21 +81,32 @@ public class RedisMessageOutput<T> extends CommandOutput<byte[], byte[], List<Ob
     @Override
     public void complete(int depth) {
         if (this.depth == KEY_VALUE && depth == ID) {
-            output.add(message);
-            message = objectMapper.createObjectNode();
+            endMessage();
         }
         this.depth = depth;
+    }
+
+    public String utf8(ByteBuffer bytes) {
+        return StandardCharsets.UTF_8.decode(bytes).toString();
     }
 
     public String base64(ByteBuffer bytes) {
         return StandardCharsets.US_ASCII.decode(Base64.getEncoder().encode(bytes)).toString();
     }
 
-    public JsonNode json(ByteBuffer bytes) {
-        try {
-            return objectMapper.readTree(new ByteBufferBackedInputStream(bytes));
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+    public byte[] bytes(ByteBuffer bytes) {
+        byte[] buffer = new byte[bytes.remaining()];
+        bytes.get(buffer);
+        return buffer;
     }
+
+    protected abstract void setMessageId(String messageId);
+
+    protected abstract void setPayload(ByteBuffer payload);
+
+    protected abstract void setMetadata(String key, String value);
+
+    protected abstract void setProperties(String key, String value);
+
+    protected abstract void endMessage();
 }
