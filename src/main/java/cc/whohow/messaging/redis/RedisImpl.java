@@ -11,10 +11,10 @@ import io.lettuce.core.protocol.ProtocolKeyword;
 
 import java.util.concurrent.CompletableFuture;
 
-public class StandaloneRedis implements Redis {
+public class RedisImpl implements Redis {
     protected final StatefulRedisConnection<byte[], byte[]> connection;
 
-    public StandaloneRedis(RedisClient client, RedisURI uri) {
+    public RedisImpl(RedisClient client, RedisURI uri) {
         this.connection = client.connect(CODEC, uri);
     }
 

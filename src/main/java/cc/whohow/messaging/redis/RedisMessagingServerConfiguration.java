@@ -58,7 +58,7 @@ public class RedisMessagingServerConfiguration {
 
     @Bean
     public Redis redis(@Autowired RedisClient redisClient, @Autowired RedisURI redisURI) {
-        return new StandaloneRedis(redisClient, redisURI);
+        return new RedisImpl(redisClient, redisURI);
     }
 
     @Bean
