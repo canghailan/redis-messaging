@@ -229,7 +229,7 @@ public class PulsarConsumer implements RedisKeyspaceListener {
                             permitMessages.addAndGet(-r.size());
                         }
                         lock.set(false);
-                        if (consumeMore.get()) {
+                        if (consumeMore.get() || r.size() == count) {
                             consume();
                         }
                     });

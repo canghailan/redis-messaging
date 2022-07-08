@@ -164,7 +164,7 @@ public class PulsarReader implements RedisKeyspaceListener {
                                 lastMessageId = RedisMessaging.EARLIEST;
                             }
                             lock.set(false);
-                            if (readMore.get()) {
+                            if (readMore.get() || r.size() == count) {
                                 read();
                             }
                         }

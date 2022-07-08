@@ -128,7 +128,7 @@ public class CloudEventsWebSocket implements RedisKeyspaceListener {
                                 lastMessageId = RedisMessaging.EARLIEST;
                             }
                             lock.set(false);
-                            if (readMore.get() || !r.isEmpty()) {
+                            if (readMore.get() || r.size() == count) {
                                 read();
                             }
                         }
