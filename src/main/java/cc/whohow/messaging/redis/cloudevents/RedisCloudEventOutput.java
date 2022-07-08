@@ -2,7 +2,6 @@ package cc.whohow.messaging.redis.cloudevents;
 
 import cc.whohow.messaging.redis.RedisMessageOutput;
 import cc.whohow.messaging.redis.RedisMessaging;
-import cc.whohow.messaging.redis.pulsar.PulsarProducer;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -14,7 +13,7 @@ import java.nio.ByteBuffer;
 import java.util.List;
 
 public class RedisCloudEventOutput extends RedisMessageOutput<CloudEvent> {
-    private static final Logger LOG = LoggerFactory.getLogger(PulsarProducer.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RedisCloudEventOutput.class);
 
     protected CloudEventBuilder cloudEventBuilder;
     protected String messageId;
