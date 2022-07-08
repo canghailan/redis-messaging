@@ -33,6 +33,9 @@ public class RedisMessaging {
     }
 
     public static String toRedisKey(String tenant, String namespace, String topic) {
+        if ("default".equals(namespace)) {
+            return topic;
+        }
         return namespace + ":" + topic;
     }
 }
